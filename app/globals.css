@@ -24,3 +24,75 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.edge-text {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 70vw;
+  text-align: center;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  white-space: pre-line;
+}
+
+.edge-text-top {
+  top: 1.5rem;
+}
+
+.edge-text-bottom {
+  bottom: 1.5rem;
+}
+
+.edge-text-vertical {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 60vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.edge-text-left {
+  left: 10%;
+}
+
+.edge-text-right {
+  right: 10%;
+}
+
+.edge-text-vertical-inner {
+  display: block;
+  max-width: 26rem;
+  text-align: left;
+  letter-spacing: 0.12em;
+  line-height: 1.4;
+  white-space: pre-line;
+}
+
+.edge-text-vertical-inner-left {
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+
+.edge-text-vertical-inner-right {
+  transform: rotate(90deg);
+  transform-origin: center;
+}
+
+@keyframes countdown-subtitle-fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.countdown-subtitle {
+  opacity: 0;
+  animation: countdown-subtitle-fade 1s ease-out forwards;
+}
