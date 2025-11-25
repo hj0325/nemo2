@@ -19,8 +19,21 @@ const ASCII_CHAR_SET = " .:-+*=%@#";
 const CHAR_WIDTH = 6;
 const CHAR_HEIGHT = 10;
 
-const FULL_QUESTION = "하루에 깨어 있는 시간이 얼마나 되나요?";
+const QUESTIONS = [
+  "하루에 깨어 있는 시간이 얼마나 되나요?",
+  "당신이 깨어있는 동안 작업 시간이 얼마나 되나요?",
+];
 const THINKING_TEXT = "AI가 생각중입니다...";
+
+const GRID_CONFIG = {
+  gridCount: 10,
+  speed: 0.0025,
+  phaseStrength: 0.05,
+  lineWidth: 1,
+};
+
+const TRANSITION_DELAY_MS = 8000; // 첫 질문 화면에 들어온 뒤 8초 후
+const TRANSITION_EFFECT_DURATION_MS = 7000; // 그리드 효과를 보여줄 시간
 
 function useTypewriter(phrases, typingSpeed, deletingSpeed, pauseMs) {
   const [text, setText] = useState("");
@@ -66,11 +79,17 @@ export default function HomePage() {
   const [countdown, setCountdown] = useState(null);
   const [hasTransitioned, setHasTransitioned] = useState(false);
   const [timeOfDay, setTimeOfDay] = useState(null); // "day" | "night"
-  const [modalText, setModalText] = useState(FULL_QUESTION);
+  const [questionIndex, setQuestionIndex] = useState(0); // 0 = 첫 번째, 1 = 두 번째
+  const [modalText, setModalText] = useState(QUESTIONS[0]);
+  const [showTransitionEffect, setShowTransitionEffect] = useState(false);
   const presenceTimerRef = useRef(null);
   const animationFrameRef = useRef(null);
   const lastAnalysisRef = useRef(0);
   const modalTimerRef = useRef(null);
+  const transitionTimerRef = useRef(null);
+  const transitionCanvasRef = useRef(null);
+  const transitionAnimationRef = useRef(null);
+  const transitionActiveRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -129,6 +148,28 @@ export default function HomePage() {
     return () => clearTimeout(id);
   }, [countdown]);
 
+  // 첫 번째 질문 화면에 입장한 뒤 8초 후 전환 효과 시작
+  useEffect(() => {
+    if (!hasTransitioned) {
+      if (transitionTimerRef.current) {
+        clearTimeout(transitionTimerRef.current);
+        transitionTimerRef.current = null;
+      }
+      return;
+    }
+
+    transitionTimerRef.current = setTimeout(() => {
+      setShowTransitionEffect(true);
+    }, TRANSITION_DELAY_MS);
+
+    return () => {
+      if (transitionTimerRef.current) {
+        clearTimeout(transitionTimerRef.current);
+        transitionTimerRef.current = null;
+      }
+    };
+  }, [hasTransitioned]);
+
   // 질문 모달 텍스트 애니메이션
   // 1) 질문이 4초간 유지
   // 2) 질문이 타이핑 사라지듯이 삭제
@@ -136,13 +177,18 @@ export default function HomePage() {
   // 4) 이 텍스트가 3초 유지된 뒤 다시 타이핑되듯이 사라지고, 3)~4) 루프
   useEffect(() => {
     if (!hasTransitioned) {
-      setModalText(FULL_QUESTION);
+      setQuestionIndex(0);
+      setModalText(QUESTIONS[0]);
       if (modalTimerRef.current) {
         clearTimeout(modalTimerRef.current);
         modalTimerRef.current = null;
       }
       return;
     }
+
+    const baseQuestion =
+      QUESTIONS[Math.min(questionIndex, QUESTIONS.length - 1)];
+    setModalText(baseQuestion);
 
     // "AI가 생각중입니다..." 한 글자씩 타이핑
     const typeThinking = (onComplete) => {
@@ -187,11 +233,11 @@ export default function HomePage() {
 
     function startSequence() {
       // 1) 질문 텍스트를 한 글자씩 지우기
-      let index = FULL_QUESTION.length;
+      let index = baseQuestion.length;
 
       const deleteStep = () => {
         index -= 1;
-        setModalText(FULL_QUESTION.slice(0, Math.max(index, 0)));
+        setModalText(baseQuestion.slice(0, Math.max(index, 0)));
 
         if (index > 0) {
           modalTimerRef.current = setTimeout(deleteStep, 40);
@@ -213,7 +259,7 @@ export default function HomePage() {
         modalTimerRef.current = null;
       }
     };
-  }, [hasTransitioned]);
+  }, [hasTransitioned, questionIndex]);
 
   // 웹캠 프레임을 ASCII 텍스트로 변환하는 루프
   useEffect(() => {
@@ -319,6 +365,130 @@ export default function HomePage() {
     };
   }, [isCameraOn, hasTransitioned]);
 
+  // 그리드 전환 효과 캔버스 애니메이션
+  useEffect(() => {
+    if (!showTransitionEffect) {
+      transitionActiveRef.current = false;
+      if (transitionAnimationRef.current) {
+        cancelAnimationFrame(transitionAnimationRef.current);
+        transitionAnimationRef.current = null;
+      }
+      return;
+    }
+
+    const canvas = transitionCanvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let width;
+    let height;
+    let gridSize;
+
+    function ease(t) {
+      return t < 0.5
+        ? 4 * t * t * t
+        : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function init() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      gridSize = (width / GRID_CONFIG.gridCount) / 2;
+    }
+
+    function drawCell(x, y, size, progress) {
+      const half = size / 2;
+
+      ctx.beginPath();
+      ctx.rect(x - half, y - half, size, size);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = GRID_CONFIG.lineWidth;
+      ctx.stroke();
+
+      if (progress > 0.01) {
+        ctx.beginPath();
+        ctx.moveTo(x, y - half);
+        ctx.lineTo(x, y + half);
+        ctx.moveTo(x - half, y);
+        ctx.lineTo(x + half, y);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${progress})`;
+        ctx.stroke();
+      }
+    }
+
+    let time = 0;
+    const startTime = performance.now();
+    transitionActiveRef.current = true;
+
+    function animate() {
+      if (!transitionActiveRef.current) {
+        return;
+      }
+
+      const elapsed = performance.now() - startTime;
+      if (elapsed > TRANSITION_EFFECT_DURATION_MS) {
+        transitionActiveRef.current = false;
+        setShowTransitionEffect(false); // 한 번 보여준 뒤 다시 웹캠 화면으로 복귀
+        setQuestionIndex(1); // 두 번째 질문으로 전환
+        return;
+      }
+
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, width, height);
+
+      const cx = width / 2;
+      const cy = height / 2;
+
+      const cols = GRID_CONFIG.gridCount + 4;
+      const rows = Math.ceil(height / gridSize) + 4;
+
+      for (let i = -cols / 2; i <= cols / 2; i++) {
+        for (let j = -rows / 2; j <= rows / 2; j++) {
+          const x0 = i * gridSize;
+          const y0 = j * gridSize;
+          const dist = Math.sqrt(i * i + j * j);
+
+          let t = (time - dist * GRID_CONFIG.phaseStrength) % 1;
+          if (t < 0) t += 1;
+
+          const easedT = ease(t);
+          const scale = 1 / Math.pow(2, easedT);
+
+          const x = cx + x0 * scale;
+          const y = cy + y0 * scale;
+          const size = gridSize * scale;
+
+          if (
+            x > -size &&
+            x < width + size &&
+            y > -size &&
+            y < height + size
+          ) {
+            drawCell(x, y, size, easedT);
+          }
+        }
+      }
+
+      time += GRID_CONFIG.speed;
+      transitionAnimationRef.current = requestAnimationFrame(animate);
+    }
+
+    init();
+    window.addEventListener("resize", init);
+    animate();
+
+    return () => {
+      transitionActiveRef.current = false;
+      if (transitionAnimationRef.current) {
+        cancelAnimationFrame(transitionAnimationRef.current);
+        transitionAnimationRef.current = null;
+      }
+      window.removeEventListener("resize", init);
+    };
+  }, [showTransitionEffect]);
+
   async function toggleCamera() {
     if (!isCameraOn) {
       try {
@@ -404,6 +574,15 @@ export default function HomePage() {
             {text}
           </span>
         </p>
+      </div>
+
+      {/* 그리드 전환 효과 레이어 */}
+      <div
+        className={`pointer-events-none absolute inset-0 z-30 bg-black transition-opacity duration-1000 ${
+          showTransitionEffect ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <canvas ref={transitionCanvasRef} className="h-full w-full" />
       </div>
 
       {countdown > 0 && (
