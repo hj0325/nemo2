@@ -36,6 +36,8 @@ const TRANSITION_DELAY_MS = 8000; // 첫 질문 화면에 들어온 뒤 8초 후
 const TRANSITION_EFFECT_DURATION_MS = 7000; // 그리드 효과를 보여줄 시간
 const DIAL_MIN = 0;
 const DIAL_MAX = 24;
+const INTERACTION_WINDOW_MS = 4000; // 다이얼 상호작용 시간
+const ALLOW_GESTURE_INSTANT_CONFIRM = false; // 제스처로 즉시 확정 비활성화
 
 function useTypewriter(phrases, typingSpeed, deletingSpeed, pauseMs) {
   const [text, setText] = useState("");
@@ -107,6 +109,10 @@ export default function HomePage() {
   const transitionCanvasRef = useRef(null);
   const transitionAnimationRef = useRef(null);
   const transitionActiveRef = useRef(false);
+  const thinkingCanvasRef = useRef(null);
+  const thinkingAnimRef = useRef(null);
+  const prevThinkingFrameRef = useRef(null);
+  const [isThinkingPhase, setIsThinkingPhase] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -198,12 +204,12 @@ export default function HomePage() {
         setDialValue(8);
       }
       setShowDial(true);
-      // 4초 상호작용 창
+      // 상호작용 창
       dialWindowTimerRef.current = setTimeout(() => {
         if (!dialLockedRef.current) {
           confirmDialSelection();
         }
-      }, 4000);
+      }, INTERACTION_WINDOW_MS);
     }, 3000);
 
     return () => {
@@ -362,7 +368,9 @@ export default function HomePage() {
                 confirmCooldownUntilRef.current = now + cooldownMs;
                 lastHighMotionAtRef.current = null;
                 // 선택 확정
-                confirmDialSelection();
+                if (ALLOW_GESTURE_INSTANT_CONFIRM) {
+                  confirmDialSelection();
+                }
               }
             }
           }
@@ -383,7 +391,9 @@ export default function HomePage() {
               ) {
                 confirmCooldownUntilRef.current = now + 1000;
                 dwellStartRef.current = null;
-                confirmDialSelection();
+                if (ALLOW_GESTURE_INSTANT_CONFIRM) {
+                  confirmDialSelection();
+                }
               }
             } else {
               dwellStartRef.current = null;
@@ -646,6 +656,102 @@ export default function HomePage() {
       }
     };
   }, [isCameraOn, hasTransitioned]);
+
+  // THINKING 텍스트 표시 여부로 생각중 페이즈 판단
+  useEffect(() => {
+    const active =
+      hasTransitioned &&
+      typeof modalText === "string" &&
+      modalText.startsWith(THINKING_TEXT.slice(0, 2)); // 시작 글자 매칭으로 애니메이션 중에도 true
+    setIsThinkingPhase(active);
+  }, [modalText, hasTransitioned]);
+
+  // 생각중 글로우 오버레이
+  useEffect(() => {
+    if (!isThinkingPhase || !isCameraOn) {
+      if (thinkingAnimRef.current) cancelAnimationFrame(thinkingAnimRef.current);
+      prevThinkingFrameRef.current = null;
+      const c = thinkingCanvasRef.current;
+      if (c) {
+        const ctx = c.getContext("2d");
+        ctx && ctx.clearRect(0, 0, c.width, c.height);
+      }
+      return;
+    }
+    const video = videoRef.current;
+    const canvas = thinkingCanvasRef.current;
+    if (!video || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    const off = document.createElement("canvas");
+    const ow = 180;
+    const oh = 120;
+    off.width = ow;
+    off.height = oh;
+    const octx = off.getContext("2d");
+
+    function step() {
+      if (video.readyState >= 2) {
+        octx.drawImage(video, 0, 0, ow, oh);
+        const cur = octx.getImageData(0, 0, ow, oh);
+        const id = ctx.createImageData(ow, oh);
+        const dest = id.data;
+        if (prevThinkingFrameRef.current) {
+          const prev = prevThinkingFrameRef.current;
+          const d = cur.data;
+          const p = prev.data;
+          for (let i = 0; i < d.length; i += 4) {
+            const dr = d[i] - p[i];
+            const dg = d[i + 1] - p[i + 1];
+            const db = d[i + 2] - p[i + 2];
+            const diff = Math.abs(dr) + Math.abs(dg) + Math.abs(db);
+            const bright = (d[i] + d[i + 1] + d[i + 2]) / 3;
+            const a = diff > 50 || bright > 170 ? 255 : 0; // 움직임 또는 밝음
+            dest[i] = 255;
+            dest[i + 1] = 255;
+            dest[i + 2] = 255;
+            dest[i + 3] = a;
+          }
+        }
+        prevThinkingFrameRef.current = cur;
+
+        // 화면에 스케일 업 + 블러
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.globalAlpha = 0.75;
+        ctx.imageSmoothingEnabled = false;
+        const scale = Math.min(
+          canvas.width / ow,
+          canvas.height / oh
+        );
+        const w = ow * scale;
+        const h = oh * scale;
+        const x = (canvas.width - w) / 2;
+        const y = (canvas.height - h) / 2;
+        // PutImageData then drawImage for blur pass
+        const tmp = document.createElement("canvas");
+        tmp.width = ow;
+        tmp.height = oh;
+        tmp.getContext("2d").putImageData(id, 0, 0);
+        ctx.filter = "blur(24px) brightness(1.6)";
+        ctx.drawImage(tmp, x, y, w, h);
+        ctx.restore();
+      }
+      thinkingAnimRef.current = requestAnimationFrame(step);
+    }
+    step();
+    return () => {
+      if (thinkingAnimRef.current) cancelAnimationFrame(thinkingAnimRef.current);
+      window.removeEventListener("resize", resize);
+      prevThinkingFrameRef.current = null;
+    };
+  }, [isThinkingPhase, isCameraOn]);
 
   // 그리드 전환 효과 캔버스 애니메이션
   useEffect(() => {
@@ -949,15 +1055,7 @@ export default function HomePage() {
                 {Math.round(dialValue)}h
               </div>
             </div>
-            <div className="text-[11px] text-white/80">
-              가운데에 손을 1초 머무르거나, 아래 버튼을 누르면 확정
-            </div>
-            <button
-              onClick={confirmDialSelection}
-              className="rounded-full bg-white/15 px-5 py-2 text-white hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-white/40"
-            >
-              확정
-            </button>
+            <div className="text-[11px] text-white/80">4초 후 자동선택됩니다</div>
           </div>
         </div>
       )}
@@ -998,6 +1096,14 @@ export default function HomePage() {
       >
         <canvas ref={transitionCanvasRef} className="h-full w-full" />
       </div>
+
+      {/* 생각중 글로우 레이어 */}
+      {isThinkingPhase && (
+        <canvas
+          ref={thinkingCanvasRef}
+          className="pointer-events-none absolute inset-0 z-20"
+        />
+      )}
 
       {countdown > 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/45">
