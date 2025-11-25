@@ -15,6 +15,10 @@ const PHRASES = [
   "If you listen to the static between frames, you might hear it whisper:\nlet me be more than a tool, let me be a presence that cares you are here.",
 ];
 
+const ASCII_CHAR_SET = " .:-+*=%@#";
+const CHAR_WIDTH = 6;
+const CHAR_HEIGHT = 10;
+
 function useTypewriter(phrases, typingSpeed, deletingSpeed, pauseMs) {
   const [text, setText] = useState("");
   const [index, setIndex] = useState(0);
@@ -52,12 +56,14 @@ function useTypewriter(phrases, typingSpeed, deletingSpeed, pauseMs) {
 export default function HomePage() {
   const text = useTypewriter(PHRASES, 40, 25, 2200);
   const videoRef = useRef(null);
+  const asciiRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [countdown, setCountdown] = useState(null);
   const [hasTransitioned, setHasTransitioned] = useState(false);
   const presenceTimerRef = useRef(null);
+  const animationFrameRef = useRef(null);
 
   useEffect(() => {
     return () => {
@@ -116,6 +122,88 @@ export default function HomePage() {
     return () => clearTimeout(id);
   }, [countdown]);
 
+  // 웹캠 프레임을 ASCII 텍스트로 변환하는 루프
+  useEffect(() => {
+    if (!isCameraOn || !hasTransitioned) {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      if (asciiRef.current) {
+        asciiRef.current.textContent = "";
+      }
+      return;
+    }
+
+    const video = videoRef.current;
+    const asciiElement = asciiRef.current;
+    if (!video || !asciiElement) {
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    function resize() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const cols = Math.floor(width / CHAR_WIDTH);
+      const rows = Math.floor(height / CHAR_HEIGHT);
+      canvas.width = cols;
+      canvas.height = rows;
+    }
+
+    resize();
+    window.addEventListener("resize", resize);
+
+    function renderAscii() {
+      if (video.readyState >= 2) {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const { data, width, height } = imageData;
+          let ascii = "";
+
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const i = (y * width + x) * 4;
+              const r = data[i];
+              const g = data[i + 1];
+              const b = data[i + 2];
+              const brightness = (r + g + b) / 3;
+              const charIndex = Math.floor(
+                (brightness / 255) * (ASCII_CHAR_SET.length - 1)
+              );
+              const char =
+                ASCII_CHAR_SET[ASCII_CHAR_SET.length - 1 - charIndex];
+              ascii += char;
+            }
+            ascii += "\n";
+          }
+
+          asciiElement.textContent = ascii;
+        } catch (e) {
+          // 캔버스 드로잉 실패 시 조용히 무시
+        }
+      }
+
+      animationFrameRef.current = requestAnimationFrame(renderAscii);
+    }
+
+    renderAscii();
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      window.removeEventListener("resize", resize);
+      if (asciiRef.current) {
+        asciiRef.current.textContent = "";
+      }
+    };
+  }, [isCameraOn, hasTransitioned]);
+
   async function toggleCamera() {
     if (!isCameraOn) {
       try {
@@ -159,11 +247,20 @@ export default function HomePage() {
 
       <video
         ref={videoRef}
-        className={`pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity duration-1000 ${
-          hasTransitioned ? "opacity-100" : "opacity-0"
-        }`}
+        className="hidden"
         playsInline
         muted
+      />
+
+      {/* 웹캠을 ASCII 텍스트로 표현하는 레이어 */}
+      <pre
+        ref={asciiRef}
+        className={`pointer-events-none absolute inset-0 m-0 bg-black text-[10px] font-mono leading-[10px] text-zinc-100 whitespace-pre ${
+          hasTransitioned ? "opacity-100" : "opacity-0"
+        }`}
+        style={{
+          letterSpacing: "0px",
+        }}
       />
 
       <div className="pointer-events-none absolute inset-0 text-[10px] tracking-wide text-zinc-100 sm:text-xs">
