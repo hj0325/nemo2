@@ -19,6 +19,9 @@ const ASCII_CHAR_SET = " .:-+*=%@#";
 const CHAR_WIDTH = 6;
 const CHAR_HEIGHT = 10;
 
+const FULL_QUESTION = "하루에 깨어 있는 시간이 얼마나 되나요?";
+const THINKING_TEXT = "AI가 생각중입니다...";
+
 function useTypewriter(phrases, typingSpeed, deletingSpeed, pauseMs) {
   const [text, setText] = useState("");
   const [index, setIndex] = useState(0);
@@ -62,8 +65,12 @@ export default function HomePage() {
   const [cameraError, setCameraError] = useState("");
   const [countdown, setCountdown] = useState(null);
   const [hasTransitioned, setHasTransitioned] = useState(false);
+  const [timeOfDay, setTimeOfDay] = useState(null); // "day" | "night"
+  const [modalText, setModalText] = useState(FULL_QUESTION);
   const presenceTimerRef = useRef(null);
   const animationFrameRef = useRef(null);
+  const lastAnalysisRef = useRef(0);
+  const modalTimerRef = useRef(null);
 
   useEffect(() => {
     return () => {
@@ -122,6 +129,92 @@ export default function HomePage() {
     return () => clearTimeout(id);
   }, [countdown]);
 
+  // 질문 모달 텍스트 애니메이션
+  // 1) 질문이 4초간 유지
+  // 2) 질문이 타이핑 사라지듯이 삭제
+  // 3) "AI가 생각중입니다..." 가 타이핑되듯이 나타남
+  // 4) 이 텍스트가 3초 유지된 뒤 다시 타이핑되듯이 사라지고, 3)~4) 루프
+  useEffect(() => {
+    if (!hasTransitioned) {
+      setModalText(FULL_QUESTION);
+      if (modalTimerRef.current) {
+        clearTimeout(modalTimerRef.current);
+        modalTimerRef.current = null;
+      }
+      return;
+    }
+
+    // "AI가 생각중입니다..." 한 글자씩 타이핑
+    const typeThinking = (onComplete) => {
+      let typeIndex = 0;
+      const typeStep = () => {
+        typeIndex += 1;
+        setModalText(THINKING_TEXT.slice(0, typeIndex));
+        if (typeIndex < THINKING_TEXT.length) {
+          modalTimerRef.current = setTimeout(typeStep, 70);
+        } else if (onComplete) {
+          // 전체 문장이 다 써진 뒤 3초 유지
+          modalTimerRef.current = setTimeout(onComplete, 3000);
+        }
+      };
+      typeStep();
+    };
+
+    // "AI가 생각중입니다..." 를 한 글자씩 삭제
+    const deleteThinking = (onComplete) => {
+      let index = THINKING_TEXT.length;
+      const deleteStep = () => {
+        index -= 1;
+        setModalText(THINKING_TEXT.slice(0, Math.max(index, 0)));
+        if (index > 0) {
+          modalTimerRef.current = setTimeout(deleteStep, 40);
+        } else if (onComplete) {
+          // 완전히 삭제된 뒤 잠깐 멈춤
+          modalTimerRef.current = setTimeout(onComplete, 260);
+        }
+      };
+      deleteStep();
+    };
+
+    // 3)~4) 를 계속 반복
+    const startThinkingLoop = () => {
+      typeThinking(() => {
+        deleteThinking(() => {
+          startThinkingLoop();
+        });
+      });
+    };
+
+    function startSequence() {
+      // 1) 질문 텍스트를 한 글자씩 지우기
+      let index = FULL_QUESTION.length;
+
+      const deleteStep = () => {
+        index -= 1;
+        setModalText(FULL_QUESTION.slice(0, Math.max(index, 0)));
+
+        if (index > 0) {
+          modalTimerRef.current = setTimeout(deleteStep, 40);
+        } else {
+          // 질문이 완전히 지워진 뒤, 생각 루프 시작
+          modalTimerRef.current = setTimeout(startThinkingLoop, 260);
+        }
+      };
+
+      deleteStep();
+    }
+
+    // 질문이 뜬 뒤 4초 후에 전체 시퀀스 시작
+    modalTimerRef.current = setTimeout(startSequence, 4000);
+
+    return () => {
+      if (modalTimerRef.current) {
+        clearTimeout(modalTimerRef.current);
+        modalTimerRef.current = null;
+      }
+    };
+  }, [hasTransitioned]);
+
   // 웹캠 프레임을 ASCII 텍스트로 변환하는 루프
   useEffect(() => {
     if (!isCameraOn || !hasTransitioned) {
@@ -163,6 +256,8 @@ export default function HomePage() {
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const { data, width, height } = imageData;
           let ascii = "";
+          let brightCount = 0;
+          let darkCount = 0;
 
           for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
@@ -177,11 +272,31 @@ export default function HomePage() {
               const char =
                 ASCII_CHAR_SET[ASCII_CHAR_SET.length - 1 - charIndex];
               ascii += char;
+
+              if (brightness >= 128) {
+                brightCount += 1;
+              } else {
+                darkCount += 1;
+              }
             }
             ascii += "\n";
           }
 
           asciiElement.textContent = ascii;
+
+          // 밝은 영역과 어두운 영역 비율을 기반으로 "낮/밤" 추정
+          const total = brightCount + darkCount;
+          if (total > 0) {
+            const now = performance.now();
+            // 너무 자주 setState 하지 않도록 0.5초 단위로만 갱신
+            if (now - lastAnalysisRef.current > 500) {
+              lastAnalysisRef.current = now;
+              const nextTimeOfDay = brightCount >= darkCount ? "day" : "night";
+              setTimeOfDay((prev) =>
+                prev === nextTimeOfDay ? prev : nextTimeOfDay
+              );
+            }
+          }
         } catch (e) {
           // 캔버스 드로잉 실패 시 조용히 무시
         }
@@ -263,6 +378,15 @@ export default function HomePage() {
         }}
       />
 
+      {/* 상단 질문 모달 */}
+      {hasTransitioned && (
+        <div className="pointer-events-auto absolute left-1/2 top-16 z-20 w-[min(90%,28rem)] -translate-x-1/2 rounded-2xl bg-white/95 px-7 py-5 text-sm text-zinc-900 shadow-2xl sm:text-base">
+          <p className="text-center leading-relaxed tracking-wide">
+            {modalText}
+          </p>
+        </div>
+      )}
+
       <div className="pointer-events-none absolute inset-0 text-[10px] tracking-wide text-zinc-100 sm:text-xs">
         <p className="edge-text edge-text-top">
           {text}
@@ -289,7 +413,7 @@ export default function HomePage() {
               {countdown}
             </div>
             <p className="countdown-subtitle text-xs tracking-[0.16em] text-zinc-200 sm:text-sm">
-              사용자의 모습을 본 뜬 디스플레이가 실현됩니다
+              사용자의 모습을 본뜬 디스플레이가 실현됩니다
             </p>
           </div>
         </div>
